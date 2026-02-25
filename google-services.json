@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "798826127583",
+    "project_id": "taskapp-fc5e8",
+    "storage_bucket": "taskapp-fc5e8.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:798826127583:android:f8d1e1419d19a5ffa8096a",
+        "android_client_info": {
+          "package_name": "com.superkimbusiness.taskapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDgE5NrWkJpfRCX7NJZVN-UfLuqny6D79c"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
