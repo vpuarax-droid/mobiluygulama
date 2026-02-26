@@ -1,10 +1,7 @@
 import React, { useEffect, useMemo, useState, useCallback } from "react";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import ChatsScreen from "./ChatsScreen";
 import ChatRoomScreen from "./ChatRoomScreen";
 import { onUnauthorized } from "../services/authEvents";
-import LoginScreen from "./LoginScreen";
-
 import {
   View,
   Text,
@@ -13,6 +10,7 @@ import {
   Alert,
   SectionList,
   Platform,
+  AppState,
 } from "react-native";
 
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -20,7 +18,7 @@ import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system";
 
 import { api } from "../services/api";
-import { getToken } from "../services/auth";
+import { getToken, clearToken } from "../services/auth";
 
 // ✅ Push click listener
 import { addPushResponseListener } from "../services/pushNotifications";
@@ -30,6 +28,8 @@ import TaskSectionHeader from "../components/TaskSectionHeader";
 import TaskCard from "../components/TaskCard";
 import TaskCreateModal from "../components/TaskCreateModal";
 import TaskDetailModal from "../components/TaskDetailModal";
+
+import { can, ACTIONS } from "../auth/permissions";
 
 const COLUMNS = [
   { key: "OPENED", title: "Görev Açıldı" },
@@ -262,7 +262,10 @@ async function uploadTaskFile(taskId) {
   return json;
 }
 
-export default function TasksScreen({ onLoggedOut }) {
+export default function TasksScreen({ onLoggedOut, currentUser }) {
+  const roleCode = currentUser?.role_code;
+  const myUserId = currentUser?.id;
+  const canCreateTask = can(roleCode, ACTIONS.CREATE_TASK);
   const [tasks, setTasks] = useState([]);
   const [selectedTask, setSelectedTask] = useState(null);
 
@@ -273,7 +276,6 @@ export default function TasksScreen({ onLoggedOut }) {
   const [screen, setScreen] = useState("tasks"); // "tasks" | "chats" | "chatroom"
   const [activeChat, setActiveChat] = useState(null);
 
-  const [authState, setAuthState] = useState("checking"); // checking | loggedIn | loggedOut
 
   // Detail
   const [detail, setDetail] = useState(null);
@@ -302,26 +304,14 @@ export default function TasksScreen({ onLoggedOut }) {
   const [selectedTargetDeptId, setSelectedTargetDeptId] = useState(null);
   const [loadingTargets, setLoadingTargets] = useState(false);
 
-  const clearAuthStorage = useCallback(async () => {
-    try {
-      await AsyncStorage.multiRemove([
-        "token",
-        "auth_token",
-        "access_token",
-        "jwt",
-        "user",
-        "auth_user",
-      ]);
-    } catch (e) {
-      // ignore
-    }
-  }, []);
-
   const forceLogout = useCallback(
     async (reason = "") => {
-      await clearAuthStorage();
-      setAuthState("loggedOut");
-      onLoggedOut?.(); // ✅ App.js'e bildir
+      // Artık AsyncStorage değil SecureStore temizlenecek
+      try {
+        await clearToken();
+      } catch (e) {}
+
+      onLoggedOut?.(); // App.js state'i düşürür
 
       setScreen("tasks");
       setActiveChat(null);
@@ -331,7 +321,7 @@ export default function TasksScreen({ onLoggedOut }) {
         Alert.alert("Oturum Kapandı", reason);
       }
     },
-    [clearAuthStorage, onLoggedOut]
+    [onLoggedOut]
   );
 
   // ✅ Push'tan gelen task_id ile direkt modal açmak için
@@ -386,26 +376,6 @@ export default function TasksScreen({ onLoggedOut }) {
       Alert.alert("Chat", "Chat listesi alınamadı.");
     }
   }
-
-  // İlk açılışta token var mı kontrol et
-  useEffect(() => {
-    let mounted = true;
-
-    (async () => {
-      try {
-        const t = await getToken();
-        if (!mounted) return;
-        setAuthState(t ? "loggedIn" : "loggedOut");
-      } catch (e) {
-        if (!mounted) return;
-        setAuthState("loggedOut");
-      }
-    })();
-
-    return () => {
-      mounted = false;
-    };
-  }, []);
 
   // ✅ Global auth event: api.js 401/403 yakalayınca buraya düşer
   useEffect(() => {
@@ -698,26 +668,35 @@ export default function TasksScreen({ onLoggedOut }) {
   }
 
   useEffect(() => {
-    let alive = true;
-    let timeoutId = null;
+  let alive = true;
+  let timeoutId = null;
+  let appState = AppState.currentState;
 
-    const loop = async () => {
-      if (!alive) return;
+  const tick = async () => {
+    if (!alive) return;
 
+    // Background’dayken ağ isteği atma
+    if (appState === "active") {
       try {
         await fetchTasks();
       } catch (e) {}
+    }
 
-      timeoutId = setTimeout(loop, 5000); // 5 saniyede bir yenile
-    };
+    timeoutId = setTimeout(tick, 15000); // ✅ 15 saniye
+  };
 
-    loop();
+  const sub = AppState.addEventListener("change", (next) => {
+    appState = next;
+  });
 
-    return () => {
-      alive = false;
-      if (timeoutId) clearTimeout(timeoutId);
-    };
-  }, []);
+  tick();
+
+  return () => {
+    alive = false;
+    if (timeoutId) clearTimeout(timeoutId);
+    sub.remove();
+  };
+}, []);
 
   const sections = useMemo(() => {
     const map = Object.fromEntries(COLUMNS.map((c) => [c.key, []]));
@@ -733,16 +712,7 @@ export default function TasksScreen({ onLoggedOut }) {
     }));
   }, [tasks]);
 
-  // Auth guard: token yoksa login ekranını göster
-  if (authState !== "loggedIn") {
-    return (
-      <LoginScreen
-        onLoggedIn={() => {
-          setAuthState("loggedIn");
-        }}
-      />
-    );
-  }
+
 
   if (screen === "chats") {
     return (
@@ -777,15 +747,17 @@ export default function TasksScreen({ onLoggedOut }) {
           </View>
         </View>
 
-        <Pressable
-          onPress={openCreate}
-          style={({ pressed }) => [
-            styles.createBtn,
-            pressed && { opacity: 0.92, transform: [{ scale: 0.98 }] },
-          ]}
-        >
-          <Text style={styles.createBtnText}>+ Yeni</Text>
-        </Pressable>
+        {canCreateTask && (
+  <Pressable
+    onPress={openCreate}
+    style={({ pressed }) => [
+      styles.createBtn,
+      pressed && { opacity: 0.92, transform: [{ scale: 0.98 }] },
+    ]}
+  >
+    <Text style={styles.createBtnText}>+ Yeni</Text>
+  </Pressable>
+)}
 
         <Pressable
           onPress={() => setScreen("chats")}
